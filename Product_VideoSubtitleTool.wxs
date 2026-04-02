@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+
+  <Product Id="*"
+           Name="Video Subtitle Tool"
+           Language="1033"
+           Version="1.0.0.1"
+           Manufacturer="VideoSubtitleTool"
+           Codepage="65001"
+           UpgradeCode="A1B2C3D4-E5F6-7890-1234-567890ABCDEF">
+
+    <Package InstallerVersion="200" Compressed="yes" InstallScope="perMachine" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version is already installed."
+                  AllowSameVersionUpgrades="yes"
+                  Schedule="afterInstallInitialize"
+                  MigrateFeatures="yes"
+                  IgnoreRemoveFailure="yes" />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- 支持自定义安装路径 -->
+    <Property Id="INSTALLFOLDER" Secure="yes" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <!-- 主程序安装目录 -->
+      <Directory Id="ProgramFilesFolder">
+        <Directory Id="INSTALLFOLDER" Name="VideoSubtitleTool" />
+      </Directory>
+      
+      <!-- 开始菜单目录 -->
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="Video Subtitle Tool" />
+      </Directory>
+      
+      <!-- 桌面目录 -->
+      <Directory Id="DesktopFolder" Name="Desktop" />
+    </Directory>
+
+    <!-- 桌面快捷方式 -->
+    <DirectoryRef Id="DesktopFolder">
+        <Component Id="DesktopShortcut" Guid="*">
+            <Shortcut Id="DesktopShortcut"
+                      Name="Video Subtitle Tool"
+                      Description="Video Subtitle Tool - Auto-generate subtitles for videos"
+                      Target="[INSTALLFOLDER]start.bat"
+                      WorkingDirectory="INSTALLFOLDER" />
+            <RegistryValue Root="HKCU"
+                           Key="Software\VideoSubtitleTool"
+                           Name="DesktopShortcut"
+                           Type="integer"
+                           Value="1"
+                           KeyPath="yes" />
+        </Component>
+    </DirectoryRef>
+    
+    <!-- 开始菜单快捷方式组件 -->
+    <DirectoryRef Id="ApplicationProgramsFolder">
+        <Component Id="StartMenuShortcut" Guid="*">
+            <Shortcut Id="StartMenuShortcut"
+                      Name="Video Subtitle Tool"
+                      Description="Video Subtitle Tool - Auto-generate subtitles for videos"
+                      Target="[INSTALLFOLDER]start.bat"
+                      WorkingDirectory="INSTALLFOLDER" />
+            <RemoveFolder Id="RemoveApplicationProgramsFolder" On="uninstall" />
+            <RegistryValue Root="HKCU"
+                           Key="Software\VideoSubtitleTool"
+                           Name="StartMenuShortcut"
+                           Type="integer"
+                           Value="1"
+                           KeyPath="yes" />
+        </Component>
+    </DirectoryRef>
+    
+    <!-- 自定义操作：启动应用程序 -->
+    <CustomAction Id="LaunchApp"
+      Directory="INSTALLFOLDER"
+      ExeCommand="cmd /c start [INSTALLFOLDER]start.bat"
+      Execute="immediate"
+      Return="asyncNoWait" />
+
+    <!-- 定义一个 deferred 自定义动作：终止应用程序 -->
+    <CustomAction Id="StopApp"
+          Directory="INSTALLFOLDER"
+          ExeCommand="taskkill /f /im python.exe"
+          Execute="deferred"
+          Impersonate="no"
+          Return="ignore" />
+
+    <!-- 调度：在 RemoveFiles 之前执行（确保文件未删时就终止进程） -->
+    <InstallExecuteSequence>
+      <!-- 安装完成后启动应用程序 -->
+      <Custom Action="LaunchApp" After="InstallFinalize">NOT Installed</Custom>
+      <!-- 终止进程：在升级或卸载时执行 -->
+      <Custom Action="StopApp" Before="RemoveFiles">REMOVE="ALL" OR UPGRADINGPRODUCTCODE</Custom>
+    </InstallExecuteSequence>
+
+    <!-- Feature 中引用 -->
+    <Feature Id="MainFeature" Title="Video Subtitle Tool" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="DesktopShortcut" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+
+    <!-- UI -->
+    <UIRef Id="WixUI_InstallDir" />
+
+  </Product>
+</Wix>

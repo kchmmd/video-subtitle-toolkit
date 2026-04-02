@@ -1,0 +1,6 @@
+temp/
+Release_Windows/
+Release_Linux/
+Release_Mac/
+*.wixpdb
+*.msi
