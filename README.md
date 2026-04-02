@@ -12,10 +12,16 @@ A simple web-based tool for automatically generating subtitles for videos using 
 - Model selection with download hints
 - LAN access support (access from other devices on the same network)
 
-## 界面
+## Mainwindow
 
 ![mainwindow](mainwindow.png)
 ![mainwindow_1](mainwindow_1.png)
+
+## Release
+
+通过网盘分享的文件：video-subtitle-toolkit
+链接: https://pan.baidu.com/s/1IEZzU3UIy1SftBc4kREzEg?pwd=jrp9 提取码: jrp9 
+--来自百度网盘超级会员v5的分享
 
 ## Quick Start
 
