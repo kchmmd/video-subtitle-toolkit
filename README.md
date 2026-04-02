@@ -12,6 +12,11 @@ A simple web-based tool for automatically generating subtitles for videos using 
 - Model selection with download hints
 - LAN access support (access from other devices on the same network)
 
+## 界面
+
+![mainwindow](mainwindow.png)
+![mainwindow_1](mainwindow_1.png)
+
 ## Quick Start
 
 ### macOS
