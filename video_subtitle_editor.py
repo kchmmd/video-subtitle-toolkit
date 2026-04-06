@@ -47,22 +47,64 @@ def traditional_to_simplified(text):
     return ''.join(result)
 
 
-def extract_audio(video_path, audio_path):
+def find_ffmpeg():
+    """查找 FFmpeg 可执行文件"""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # 检查各种可能的路径
+    possible_paths = [
+        # Release 打包结构（ffmpeg 在当前目录）
+        os.path.join(script_dir, 'ffmpeg.exe'),
+        os.path.join(script_dir, 'ffmpeg', 'ffmpeg.exe'),
+        os.path.join(script_dir, 'ffmpeg', 'bin', 'ffmpeg.exe'),
+        # Linux/macOS
+        os.path.join(script_dir, 'ffmpeg'),
+        os.path.join(script_dir, 'ffmpeg', 'ffmpeg'),
+        os.path.join(script_dir, 'ffmpeg', 'bin', 'ffmpeg'),
+        # 系统 PATH
+        'ffmpeg',
+    ]
+    
+    for path in possible_paths:
+        if os.path.exists(path):
+            return path
+    
+    # 尝试使用系统 PATH 中的 ffmpeg
+    return 'ffmpeg'
+
+
+def extract_audio(video_path, audio_path, stop_callback=None):
     """从视频中提取音频"""
+    ffmpeg_path = find_ffmpeg()
     cmd = [
-        'ffmpeg', '-i', video_path,
+        ffmpeg_path, '-i', video_path,
         '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1',
         '-y', audio_path
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"FFmpeg stdout: {result.stdout}")
-        print(f"FFmpeg stderr: {result.stderr}")
-        raise Exception(f"FFmpeg 错误: {result.stderr}")
+    
+    # 使用 Popen 以便支持停止
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    
+    # 等待进程完成，期间定期检查停止标志
+    while process.poll() is None:
+        if stop_callback and stop_callback():
+            process.terminate()
+            process.wait()
+            raise InterruptedError("音频提取已停止")
+        # 短暂等待后再次检查
+        import time
+        time.sleep(0.1)
+    
+    result_stdout, result_stderr = process.communicate()
+    
+    if process.returncode != 0:
+        print(f"FFmpeg stdout: {result_stdout.decode() if result_stdout else ''}")
+        print(f"FFmpeg stderr: {result_stderr.decode() if result_stderr else ''}")
+        raise Exception(f"FFmpeg 错误：{result_stderr.decode() if result_stderr else ''}")
     return audio_path
 
 
-def run_whisper(audio_path, output_dir, basename, whisper_dir, model_name='ggml-small.bin'):
+def run_whisper(audio_path, output_dir, basename, whisper_dir, model_name='ggml-small.bin', stop_callback=None):
     """运行 Whisper 进行语音识别"""
     whisper_bin = None
     
@@ -122,7 +164,26 @@ def run_whisper(audio_path, output_dir, basename, whisper_dir, model_name='ggml-
         '-l', 'zh',
         '-t', '8'
     ]
-    subprocess.run(cmd, check=True, capture_output=True)
+    
+    # 使用 Popen 以便支持停止
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    
+    # 等待进程完成，期间定期检查停止标志
+    while process.poll() is None:
+        if stop_callback and stop_callback():
+            process.terminate()
+            process.wait()
+            raise InterruptedError("语音识别已停止")
+        # 短暂等待后再次检查
+        import time
+        time.sleep(0.1)
+    
+    result_stdout, result_stderr = process.communicate()
+    
+    if process.returncode != 0:
+        print(f"Whisper stdout: {result_stdout.decode() if result_stdout else ''}")
+        print(f"Whisper stderr: {result_stderr.decode() if result_stderr else ''}")
+        raise Exception(f"Whisper 错误：{result_stderr.decode() if result_stderr else ''}")
     
     srt_file = f"{output_prefix}.srt"
     if os.path.exists(srt_file):
@@ -300,7 +361,7 @@ def find_chinese_font():
     return None
 
 
-def burn_subtitles(video_path, srt_path, output_path, font_path=None, progress_callback=None, log_callback=None):
+def burn_subtitles(video_path, srt_path, output_path, font_path=None, progress_callback=None, log_callback=None, stop_callback=None):
     """烧录字幕到视频（包含音频）"""
     if font_path is None:
         font_path = find_chinese_font()
@@ -406,9 +467,20 @@ def burn_subtitles(video_path, srt_path, output_path, font_path=None, progress_c
         out.write(frame)
         frame_idx += 1
         
+        # 检查是否应该停止
+        if stop_callback and stop_callback():
+            if log_callback:
+                log_callback("烧录已停止")
+            cap.release()
+            out.release()
+            # 删除未完成的临时文件
+            if os.path.exists(temp_video_no_audio):
+                os.remove(temp_video_no_audio)
+            return
+        
         if progress_callback and frame_idx % 10 == 0:
             progress = 50 + int((frame_idx / total_frames) * 40)
-            progress_callback(min(progress, 90), f"烧录字幕: {frame_idx}/{total_frames}")
+            progress_callback(min(progress, 90), f"烧录字幕：{frame_idx}/{total_frames}")
         
         if frame_idx % 100 == 0 and not progress_callback:
             print(f"进度：{frame_idx}/{total_frames} ({frame_idx*100//total_frames}%)")
@@ -425,8 +497,9 @@ def burn_subtitles(video_path, srt_path, output_path, font_path=None, progress_c
     if progress_callback:
         progress_callback(95, "正在合并音频...")
     
+    ffmpeg_path = find_ffmpeg()
     merge_cmd = [
-        'ffmpeg', '-i', temp_video_no_audio, '-i', video_path,
+        ffmpeg_path, '-i', temp_video_no_audio, '-i', video_path,
         '-c:v', 'copy', '-c:a', 'aac', '-map', '0:v:0', '-map', '1:a:0',
         '-y', output_path
     ]

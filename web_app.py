@@ -496,6 +496,8 @@ HTML_TEMPLATE = """
                         option.textContent = model.name;
                         select.appendChild(option);
                     });
+                    // 默认选择第一个模型
+                    select.selectedIndex = 0;
                     loading.style.display = 'none';
                 } else {
                     loading.textContent = '未找到模型文件';
@@ -752,7 +754,7 @@ HTML_TEMPLATE = """
 
 
 class VideoProcessingThread(threading.Thread):
-    def __init__(self, video_path, whisper_dir, upload_dir, mode='oneclick', model_name='ggml-small.bin'):
+    def __init__(self, video_path, whisper_dir, upload_dir, mode='oneclick', model_name=None):
         super().__init__()
         self.video_path = video_path
         self.whisper_dir = whisper_dir
@@ -783,12 +785,26 @@ class VideoProcessingThread(threading.Thread):
                 processing_status["video_path"] = video_path
                 processing_status["basename"] = basename
 
+            # 如果没有指定模型，使用第一个可用的模型
+            if not self.model_name:
+                models_dir = os.path.join(self.whisper_dir, 'models')
+                if os.path.exists(models_dir):
+                    available_models = [f for f in os.listdir(models_dir) if f.endswith('.bin') and f.startswith('ggml-')]
+                    if available_models:
+                        self.model_name = available_models[0]
+                    else:
+                        self.log("错误：未找到可用的模型文件")
+                        return
+                else:
+                    self.log("错误：未找到模型目录")
+                    return
+
             self.log("======================================")
             self.log("视频加字幕")
             self.log("======================================")
             self.log(f"输入视频：{video_path}")
             self.log(f"处理模式：{'一键生成' if self.mode == 'oneclick' else '分步生成'}")
-            self.log(f"当前模型：ggml-small.bin")
+            self.log(f"当前模型：{self.model_name}")
             self.log("")
 
             temp_dir = tempfile.mkdtemp()
@@ -796,10 +812,10 @@ class VideoProcessingThread(threading.Thread):
             try:
                 audio_path = os.path.join(temp_dir, f"{basename}_audio.wav")
 
-                # 步骤1: 提取音频
+                # 步骤 1: 提取音频
                 self.log("[1/3] 提取音频...")
                 self.set_progress(5, "正在提取音频...")
-                extract_audio(video_path, audio_path)
+                extract_audio(video_path, audio_path, self.is_stopped)
                 self.log("  ✓ 音频提取完成")
                 self.set_progress(15, "音频提取完成")
 
@@ -807,12 +823,12 @@ class VideoProcessingThread(threading.Thread):
                     self.log("处理已停止")
                     return
 
-                # 步骤2: 语音识别
+                # 步骤 2: 语音识别
                 self.log(f"[2/3] 语音识别（Whisper）...")
                 self.log(f"  使用模型：{self.model_name}")
                 self.set_progress(20, "正在语音识别...")
                 srt_path = os.path.join(self.upload_dir, f"{basename}.srt")
-                srt_path = run_whisper(audio_path, self.upload_dir, basename, self.whisper_dir, self.model_name)
+                srt_path = run_whisper(audio_path, self.upload_dir, basename, self.whisper_dir, self.model_name, self.is_stopped)
                 self.log(f"  ✓ 字幕生成：{srt_path}")
                 self.set_progress(50, "语音识别完成")
 
@@ -852,7 +868,8 @@ class VideoProcessingThread(threading.Thread):
                     srt_path, 
                     output_path,
                     progress_callback=self.set_progress,
-                    log_callback=self.log
+                    log_callback=self.log,
+                    stop_callback=self.is_stopped
                 )
 
                 if self.is_stopped():
@@ -884,6 +901,10 @@ class VideoProcessingThread(threading.Thread):
 
             finally:
                 shutil.rmtree(temp_dir, ignore_errors=True)
+
+        except InterruptedError as e:
+            self.log(f"已停止：{str(e)}")
+            self.set_progress(0, "已停止")
 
         except Exception as e:
             self.log(f"错误：{str(e)}")
@@ -940,7 +961,8 @@ class RenderingThread(threading.Thread):
                 srt_path, 
                 output_path,
                 progress_callback=self.set_progress,
-                log_callback=self.log
+                log_callback=self.log,
+                stop_callback=self.is_stopped
             )
 
             if self.is_stopped():
@@ -969,6 +991,10 @@ class RenderingThread(threading.Thread):
                     {"name": f"{basename}.srt (原始字幕)", "path": srt_path},
                     {"name": f"{basename}_with_subtitles.mp4 (最终视频)", "path": output_path}
                 ]
+
+        except InterruptedError as e:
+            self.log(f"已停止：{str(e)}")
+            self.set_progress(0, "已停止")
 
         except Exception as e:
             self.log(f"错误：{str(e)}")
