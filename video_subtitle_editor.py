@@ -19,8 +19,62 @@ import sys
 import os
 import subprocess
 import tempfile
+import platform
+import threading
+import queue
 
 # 常用繁体转简体映射表（精简版）
+
+def detect_gpu():
+    """检测GPU支持情况"""
+    gpu_info = {
+        'cuda_available': False,
+        'metal_available': False,
+        'opencl_available': False,
+        'platform': platform.system()
+    }
+    
+    # 检测CUDA (NVIDIA GPU)
+    try:
+        result = subprocess.run(
+            ['nvidia-smi'], 
+            capture_output=True, 
+            text=True
+        )
+        if result.returncode == 0:
+            gpu_info['cuda_available'] = True
+    except:
+        pass
+    
+    # 检测Metal (Apple Silicon)
+    if platform.system() == 'Darwin':
+        try:
+            result = subprocess.run(
+                ['system_profiler', 'SPDisplaysDataType'], 
+                capture_output=True, 
+                text=True
+            )
+            if 'Metal' in result.stdout:
+                gpu_info['metal_available'] = True
+        except:
+            pass
+    
+    # 检测OpenCL (通用GPU)
+    try:
+        result = subprocess.run(
+            ['clinfo'], 
+            capture_output=True, 
+            text=True
+        )
+        if result.returncode == 0:
+            gpu_info['opencl_available'] = True
+    except:
+        pass
+    
+    return gpu_info
+
+
+gpu_info = detect_gpu()
 
 TRADITIONAL_TO_SIMPLIFIED = {
     '後': '后', '裏': '里', '麼': '么', '纔': '才', '讓': '让',
@@ -73,14 +127,21 @@ def find_ffmpeg():
     return 'ffmpeg'
 
 
-def extract_audio(video_path, audio_path, stop_callback=None):
+def extract_audio(video_path, audio_path, stop_callback=None, log_callback=None):
     """从视频中提取音频"""
+    import time
+    
     ffmpeg_path = find_ffmpeg()
     cmd = [
         ffmpeg_path, '-i', video_path,
         '-vn', '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1',
         '-y', audio_path
     ]
+    
+    # 音频提取通常不需要 GPU 加速，这里保持不变
+    
+    # 记录开始时间
+    start_time = time.time()
     
     # 使用 Popen 以便支持停止
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -92,10 +153,19 @@ def extract_audio(video_path, audio_path, stop_callback=None):
             process.wait()
             raise InterruptedError("音频提取已停止")
         # 短暂等待后再次检查
-        import time
         time.sleep(0.1)
     
     result_stdout, result_stderr = process.communicate()
+    
+    # 计算耗时
+    elapsed_time = time.time() - start_time
+    
+    # 输出耗时
+    msg = f"音频提取完成，耗时：{elapsed_time:.2f}秒"
+    if log_callback:
+        log_callback(msg)
+    else:
+        print(msg)
     
     if process.returncode != 0:
         print(f"FFmpeg stdout: {result_stdout.decode() if result_stdout else ''}")
@@ -104,7 +174,16 @@ def extract_audio(video_path, audio_path, stop_callback=None):
     return audio_path
 
 
-def run_whisper(audio_path, output_dir, basename, whisper_dir, model_name='ggml-small.bin', stop_callback=None):
+def run_whisper(
+    audio_path,
+    output_dir,
+    basename,
+    whisper_dir,
+    model_name='ggml-small.bin',
+    stop_callback=None,
+    log_callback=None,
+    progress_callback=None
+):
     """运行 Whisper 进行语音识别"""
     whisper_bin = None
     
@@ -165,25 +244,127 @@ def run_whisper(audio_path, output_dir, basename, whisper_dir, model_name='ggml-
         '-t', '8'
     ]
     
-    # 使用 Popen 以便支持停止
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # 添加 GPU 支持
+    # 注意：whisper-cli 的 -ng/--no-gpu 是布尔开关，出现即禁用 GPU
+    # 因此，GPU 模式下不要传 -ng；CPU 模式才传 -ng
+    if gpu_info['cuda_available']:
+        # NVIDIA CUDA GPU: 保持默认（不传 -ng）
+        if log_callback:
+            log_callback("使用 NVIDIA GPU 加速语音识别 (CUDA)")
+        else:
+            print("使用 NVIDIA GPU 加速语音识别 (CUDA)")
+    elif gpu_info['metal_available']:
+        # Apple Metal GPU: 保持默认（不传 -ng）
+        if log_callback:
+            log_callback("使用 Apple Silicon GPU 加速语音识别 (Metal)")
+        else:
+            print("使用 Apple Silicon GPU 加速语音识别 (Metal)")
+    elif gpu_info['opencl_available']:
+        # OpenCL GPU: 保持默认（不传 -ng）
+        if log_callback:
+            log_callback("使用 OpenCL GPU 加速语音识别")
+        else:
+            print("使用 OpenCL GPU 加速语音识别")
+    else:
+        # CPU 模式：显式禁用 GPU
+        cmd.append('-ng')
+        if log_callback:
+            log_callback("使用 CPU 进行语音识别")
+        else:
+            print("使用 CPU 进行语音识别")
     
-    # 等待进程完成，期间定期检查停止标志
+    # 记录开始时间
+    import time
+    start_time = time.time()
+    
+    # 输出执行的命令（用于调试）
+    cmd_str = ' '.join(cmd)
+    if log_callback:
+        log_callback(f"执行命令: {cmd_str}")
+    else:
+        print(f"执行命令: {cmd_str}")
+    
+    # 使用 Popen 以便支持停止，并实时读取输出
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding='utf-8',
+        errors='replace',
+        bufsize=1
+    )
+
+    output_queue = queue.Queue()
+
+    def stream_reader(stream, stream_name):
+        try:
+            for line in iter(stream.readline, ''):
+                line = line.strip()
+                if line:
+                    output_queue.put((stream_name, line))
+        finally:
+            stream.close()
+
+    stdout_thread = threading.Thread(target=stream_reader, args=(process.stdout, 'stdout'), daemon=True)
+    stderr_thread = threading.Thread(target=stream_reader, args=(process.stderr, 'stderr'), daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+
+    last_heartbeat_time = start_time
+
+    # 等待进程完成，期间定期检查停止标志、回传实时日志、上报心跳进度
     while process.poll() is None:
         if stop_callback and stop_callback():
             process.terminate()
             process.wait()
             raise InterruptedError("语音识别已停止")
-        # 短暂等待后再次检查
-        import time
+
+        while True:
+            try:
+                stream_name, line = output_queue.get_nowait()
+            except queue.Empty:
+                break
+
+            if log_callback:
+                log_callback(f"[whisper/{stream_name}] {line}")
+
+        now = time.time()
+        if now - last_heartbeat_time >= 2:
+            elapsed = int(now - start_time)
+            if progress_callback:
+                heartbeat_progress = min(48, 20 + elapsed // 2)
+                progress_callback(heartbeat_progress, f"语音识别中... 已运行 {elapsed} 秒")
+            if log_callback:
+                log_callback(f"语音识别进行中... 已运行 {elapsed} 秒")
+            last_heartbeat_time = now
+
         time.sleep(0.1)
+
+    stdout_thread.join(timeout=1)
+    stderr_thread.join(timeout=1)
+
+    # 收尾读取队列里的剩余输出
+    while True:
+        try:
+            stream_name, line = output_queue.get_nowait()
+        except queue.Empty:
+            break
+        if log_callback:
+            log_callback(f"[whisper/{stream_name}] {line}")
     
-    result_stdout, result_stderr = process.communicate()
+    # 计算耗时
+    elapsed_time = time.time() - start_time
+    
+    # 输出耗时
+    msg = f"语音识别完成，耗时：{elapsed_time:.2f}秒"
+    if log_callback:
+        log_callback(msg)
+    else:
+        print(msg)
     
     if process.returncode != 0:
-        print(f"Whisper stdout: {result_stdout.decode() if result_stdout else ''}")
-        print(f"Whisper stderr: {result_stderr.decode() if result_stderr else ''}")
-        raise Exception(f"Whisper 错误：{result_stderr.decode() if result_stderr else ''}")
+        raise Exception(f"Whisper 进程退出码异常：{process.returncode}")
     
     srt_file = f"{output_prefix}.srt"
     if os.path.exists(srt_file):
@@ -363,6 +544,11 @@ def find_chinese_font():
 
 def burn_subtitles(video_path, srt_path, output_path, font_path=None, progress_callback=None, log_callback=None, stop_callback=None):
     """烧录字幕到视频（包含音频）"""
+    import time
+    
+    # 记录开始时间
+    start_time = time.time()
+    
     if font_path is None:
         font_path = find_chinese_font()
         if not font_path:
@@ -370,6 +556,20 @@ def burn_subtitles(video_path, srt_path, output_path, font_path=None, progress_c
                 log_callback("警告：未找到中文字体，将使用默认字体")
             else:
                 print("警告：未找到中文字体，将使用默认字体")
+    
+    # 记录 GPU 使用情况
+    if log_callback:
+        gpu_status = []
+        if gpu_info['cuda_available']:
+            gpu_status.append("NVIDIA GPU (h264_nvenc)")
+        if gpu_info['metal_available']:
+            gpu_status.append("Apple Silicon (h264_videotoolbox)")
+        if gpu_info['opencl_available']:
+            gpu_status.append("OpenCL GPU (h264_vaapi)")
+        if gpu_status:
+            log_callback(f"GPU 加速：{', '.join(gpu_status)}")
+        else:
+            log_callback("GPU 加速：无（使用 CPU 处理）")
     
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -498,15 +698,68 @@ def burn_subtitles(video_path, srt_path, output_path, font_path=None, progress_c
         progress_callback(95, "正在合并音频...")
     
     ffmpeg_path = find_ffmpeg()
-    merge_cmd = [
-        ffmpeg_path, '-i', temp_video_no_audio, '-i', video_path,
-        '-c:v', 'copy', '-c:a', 'aac', '-map', '0:v:0', '-map', '1:a:0',
-        '-y', output_path
-    ]
+    
+    # 根据 GPU 类型选择不同的编码方式
+    if gpu_info['cuda_available']:
+        # NVIDIA GPU: 使用 h264_nvenc 编码器
+        merge_cmd = [
+            ffmpeg_path, '-i', temp_video_no_audio, '-i', video_path,
+            '-c:v', 'h264_nvenc', '-preset', 'medium', '-rc', 'vbr',
+            '-c:a', 'aac', '-b:a', '192k',
+            '-map', '0:v:0', '-map', '1:a:0',
+            '-y', output_path
+        ]
+        if log_callback:
+            log_callback("使用 NVIDIA GPU 加速编码 (h264_nvenc)")
+        else:
+            print("使用 NVIDIA GPU 加速编码 (h264_nvenc)")
+    elif gpu_info['metal_available']:
+        # Apple Silicon: 使用 videotoolbox
+        merge_cmd = [
+            ffmpeg_path, '-i', temp_video_no_audio, '-i', video_path,
+            '-c:v', 'h264_videotoolbox', '-preset', 'medium',
+            '-c:a', 'aac', '-b:a', '192k',
+            '-map', '0:v:0', '-map', '1:a:0',
+            '-y', output_path
+        ]
+        if log_callback:
+            log_callback("使用 Apple Silicon GPU 加速编码 (h264_videotoolbox)")
+        else:
+            print("使用 Apple Silicon GPU 加速编码 (h264_videotoolbox)")
+    elif gpu_info['opencl_available']:
+        # OpenCL GPU: 使用 h264_vaapi 或 qsv
+        merge_cmd = [
+            ffmpeg_path, '-i', temp_video_no_audio, '-i', video_path,
+            '-c:v', 'h264_vaapi', '-preset', 'medium',
+            '-c:a', 'aac', '-b:a', '192k',
+            '-map', '0:v:0', '-map', '1:a:0',
+            '-y', output_path
+        ]
+        if log_callback:
+            log_callback("使用 OpenCL GPU 加速编码 (h264_vaapi)")
+        else:
+            print("使用 OpenCL GPU 加速编码 (h264_vaapi)")
+    else:
+        # CPU: 使用 copy 模式（最快）
+        merge_cmd = [
+            ffmpeg_path, '-i', temp_video_no_audio, '-i', video_path,
+            '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
+            '-map', '0:v:0', '-map', '1:a:0',
+            '-y', output_path
+        ]
+        if log_callback:
+            log_callback("使用 CPU 编码（copy 模式）")
+        else:
+            print("使用 CPU 编码（copy 模式）")
+    
     subprocess.run(merge_cmd, check=True, capture_output=True)
     
     # 删除临时文件
     os.remove(temp_video_no_audio)
+    
+    # 计算耗时
+    elapsed_time = time.time() - start_time
+    print(f"字幕烧录完成，耗时：{elapsed_time:.2f}秒")
     
     if log_callback:
         log_callback(f"完成！输出文件：{output_path}")

@@ -22,7 +22,8 @@ sys.path.insert(0, script_dir)
 
 from video_subtitle_editor import (
     extract_audio, run_whisper, parse_srt, time_to_frame,
-    find_chinese_font, render_subtitle, burn_subtitles
+    find_chinese_font, render_subtitle, burn_subtitles,
+    gpu_info
 )
 
 # 全局状态
@@ -405,6 +406,10 @@ HTML_TEMPLATE = """
                 <span class="model-hint-icon" onclick="showModelHint()" style="margin-left: 10px; cursor: pointer; font-size: 14px; color: white; display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: #4a90e2; transition: background 0.2s; font-weight: bold;" onmouseover="this.style.background='#357abd'" onmouseout="this.style.background='#4a90e2'">?</span>
             </div>
             
+            <div id="gpuStatus" style="margin: 10px 0; padding: 10px; background: #e8f5e8; border-radius: 6px; font-size: 13px; color: #2e7d32;">
+                <span id="gpuInfo">正在检测 GPU 支持...</span>
+            </div>
+            
             <!-- 模型提示弹窗遮罩 -->
             <div id="modelHintOverlay" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 9998;" onclick="hideModelHint()"></div>
             
@@ -510,8 +515,41 @@ HTML_TEMPLATE = """
         
         // 页面加载时调用
         loadModels();
+        loadGpuInfo();
         
         // 显示/隐藏模型提示框
+        
+        // 加载GPU信息
+        async function loadGpuInfo() {
+            try {
+                const response = await fetch('/gpu');
+                const data = await response.json();
+                const gpuInfo = document.getElementById('gpuInfo');
+                const gpuStatus = document.getElementById('gpuStatus');
+                
+                let statusText = '';
+                let statusClass = '';
+                
+                if (data.cuda_available || data.metal_available || data.opencl_available) {
+                    const gpuTypes = [];
+                    if (data.cuda_available) gpuTypes.push('NVIDIA GPU (CUDA)');
+                    if (data.metal_available) gpuTypes.push('Apple Silicon (Metal)');
+                    if (data.opencl_available) gpuTypes.push('OpenCL GPU');
+                    
+                    statusText = `✅ GPU 加速可用：${gpuTypes.join(', ')}`;
+                    statusClass = 'background: #e8f5e8; color: #2e7d32;';
+                } else {
+                    statusText = 'ℹ️ 使用 CPU 处理（未检测到 GPU 支持）';
+                    statusClass = 'background: #fff3e0; color: #ef6c00;';
+                }
+                
+                gpuInfo.textContent = statusText;
+                gpuStatus.style = statusClass + ' margin: 10px 0; padding: 10px; border-radius: 6px; font-size: 13px;';
+            } catch (error) {
+                console.error('加载 GPU 信息失败:', error);
+                document.getElementById('gpuInfo').textContent = '无法检测 GPU 状态';
+            }
+        }
         function showModelHint() {
             document.getElementById('modelHintOverlay').style.display = 'block';
             document.getElementById('modelHintPopup').style.display = 'block';
@@ -815,7 +853,7 @@ class VideoProcessingThread(threading.Thread):
                 # 步骤 1: 提取音频
                 self.log("[1/3] 提取音频...")
                 self.set_progress(5, "正在提取音频...")
-                extract_audio(video_path, audio_path, self.is_stopped)
+                extract_audio(video_path, audio_path, self.is_stopped, self.log)
                 self.log("  ✓ 音频提取完成")
                 self.set_progress(15, "音频提取完成")
 
@@ -828,7 +866,16 @@ class VideoProcessingThread(threading.Thread):
                 self.log(f"  使用模型：{self.model_name}")
                 self.set_progress(20, "正在语音识别...")
                 srt_path = os.path.join(self.upload_dir, f"{basename}.srt")
-                srt_path = run_whisper(audio_path, self.upload_dir, basename, self.whisper_dir, self.model_name, self.is_stopped)
+                srt_path = run_whisper(
+                    audio_path,
+                    self.upload_dir,
+                    basename,
+                    self.whisper_dir,
+                    self.model_name,
+                    self.is_stopped,
+                    self.log,
+                    self.set_progress
+                )
                 self.log(f"  ✓ 字幕生成：{srt_path}")
                 self.set_progress(50, "语音识别完成")
 
@@ -1011,6 +1058,14 @@ class VideoEditorHandler(http.server.SimpleHTTPRequestHandler):
         self.upload_dir = kwargs.pop('upload_dir')
         self.whisper_dir = kwargs.pop('whisper_dir')
         super().__init__(*args, **kwargs)
+    
+    def log_message(self, format, *args):
+        """重写日志方法，忽略连接重置错误"""
+        # 忽略常见的网络连接错误
+        if "ConnectionResetError" in str(args) or "forcibly closed" in str(args):
+            return
+        # 其他消息正常输出
+        print(f"{self.address_string()} - - [{self.log_date_time_string()}] {format % args}")
 
     def get_available_models(self):
         """获取可用的模型列表"""
@@ -1030,90 +1085,104 @@ class VideoEditorHandler(http.server.SimpleHTTPRequestHandler):
         return models
 
     def do_GET(self):
-        if self.path == '/':
-            self.send_response(200)
-            self.send_header('Content-type', 'text/html; charset=utf-8')
-            self.end_headers()
-            self.wfile.write(HTML_TEMPLATE.encode('utf-8'))
-        elif self.path == '/models':
-            # 返回可用模型列表
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            models = self.get_available_models()
-            self.wfile.write(json.dumps({'models': models}).encode('utf-8'))
-        elif self.path.startswith('/download/'):
-            file_path = urllib.parse.unquote(self.path[len('/download/'):])
-            if os.path.exists(file_path):
+        try:
+            if self.path == '/':
                 self.send_response(200)
-                self.send_header('Content-type', 'application/octet-stream')
-                self.send_header('Content-Disposition', f'attachment; filename="{os.path.basename(file_path)}"')
+                self.send_header('Content-type', 'text/html; charset=utf-8')
                 self.end_headers()
-                with open(file_path, 'rb') as f:
-                    self.wfile.write(f.read())
+                self.wfile.write(HTML_TEMPLATE.encode('utf-8'))
+            elif self.path == '/models':
+                # 返回可用模型列表
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                models = self.get_available_models()
+                self.wfile.write(json.dumps({'models': models}).encode('utf-8'))
+            elif self.path == '/gpu':
+                # 返回 GPU 信息
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps(gpu_info).encode('utf-8'))
+            elif self.path.startswith('/download/'):
+                file_path = urllib.parse.unquote(self.path[len('/download/'):])
+                if os.path.exists(file_path):
+                    self.send_response(200)
+                    self.send_header('Content-type', 'application/octet-stream')
+                    self.send_header('Content-Disposition', f'attachment; filename="{os.path.basename(file_path)}"')
+                    self.end_headers()
+                    with open(file_path, 'rb') as f:
+                        self.wfile.write(f.read())
+                else:
+                    self.send_error(404, 'File not found')
+            elif self.path == '/status':
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                with lock:
+                    self.wfile.write(json.dumps(processing_status).encode('utf-8'))
             else:
-                self.send_error(404, 'File not found')
-        elif self.path == '/status':
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            with lock:
-                self.wfile.write(json.dumps(processing_status).encode('utf-8'))
-        else:
-            super().do_GET()
+                super().do_GET()
+        except (ConnectionResetError, BrokenPipeError):
+            # 客户端断开连接，忽略此错误，任务会继续在后台运行
+            pass
+        except Exception as e:
+            # 其他错误，记录日志
+            self.log_message(f"GET 错误：{e}")
 
     def do_POST(self):
-        if self.path == '/upload':
-            content_type = self.headers.get('Content-Type')
-            if content_type and 'multipart/form-data' in content_type:
-                content_length = int(self.headers.get('Content-Length', 0))
-                
-                if content_length > 0:
-                    data = self.rfile.read(content_length)
+        try:
+            if self.path == '/upload':
+                content_type = self.headers.get('Content-Type')
+                if content_type and 'multipart/form-data' in content_type:
+                    content_length = int(self.headers.get('Content-Length', 0))
                     
-                    boundary = content_type.split('boundary=')[1].encode('utf-8')
-                    parts = data.split(b'--' + boundary)
-                    
-                    filename = None
-                    file_content = None
-                    mode = 'oneclick'
-                    model_name = 'ggml-small.bin'  # 默认模型
-                    
-                    for part in parts:
-                        if b'Content-Disposition: form-data' in part:
-                            if b'name="video"' in part:
-                                # 找到 filename
-                                fname_match = part.find(b'filename="')
-                                if fname_match != -1:
-                                    fname_start = fname_match + 10
-                                    fname_end = part.find(b'"', fname_start)
-                                    filename = part[fname_start:fname_end].decode('utf-8')
-                                
-                                # 找到内容开始
-                                header_end = part.find(b'\r\n\r\n')
-                                if header_end != -1:
-                                    content_start = header_end + 4
-                                    # 从内容开始到结尾，去掉最后的 \r\n
-                                    content = part[content_start:]
-                                    if content.endswith(b'\r\n'):
-                                        content = content[:-2]
-                                    file_content = content
-                            elif b'name="mode"' in part:
-                                header_end = part.find(b'\r\n\r\n')
-                                if header_end != -1:
-                                    content_start = header_end + 4
-                                    content = part[content_start:]
-                                    if content.endswith(b'\r\n'):
-                                        content = content[:-2]
-                                    mode = content.decode('utf-8')
-                            elif b'name="model"' in part:
-                                header_end = part.find(b'\r\n\r\n')
-                                if header_end != -1:
-                                    content_start = header_end + 4
-                                    content = part[content_start:]
-                                    if content.endswith(b'\r\n'):
-                                        content = content[:-2]
-                                    model_name = content.decode('utf-8')
+                    if content_length > 0:
+                        data = self.rfile.read(content_length)
+                        
+                        boundary = content_type.split('boundary=')[1].encode('utf-8')
+                        parts = data.split(b'--' + boundary)
+                        
+                        filename = None
+                        file_content = None
+                        mode = 'oneclick'
+                        model_name = 'ggml-small.bin'  # 默认模型
+                        
+                        for part in parts:
+                            if b'Content-Disposition: form-data' in part:
+                                if b'name="video"' in part:
+                                    # 找到 filename
+                                    fname_match = part.find(b'filename="')
+                                    if fname_match != -1:
+                                        fname_start = fname_match + 10
+                                        fname_end = part.find(b'"', fname_start)
+                                        filename = part[fname_start:fname_end].decode('utf-8')
+                                    
+                                    # 找到内容开始
+                                    header_end = part.find(b'\r\n\r\n')
+                                    if header_end != -1:
+                                        content_start = header_end + 4
+                                        # 从内容开始到结尾，去掉最后的 \r\n
+                                        content = part[content_start:]
+                                        if content.endswith(b'\r\n'):
+                                            content = content[:-2]
+                                        file_content = content
+                                elif b'name="mode"' in part:
+                                    header_end = part.find(b'\r\n\r\n')
+                                    if header_end != -1:
+                                        content_start = header_end + 4
+                                        content = part[content_start:]
+                                        if content.endswith(b'\r\n'):
+                                            content = content[:-2]
+                                        mode = content.decode('utf-8')
+                                elif b'name="model"' in part:
+                                    header_end = part.find(b'\r\n\r\n')
+                                    if header_end != -1:
+                                        content_start = header_end + 4
+                                        content = part[content_start:]
+                                        if content.endswith(b'\r\n'):
+                                            content = content[:-2]
+                                        model_name = content.decode('utf-8')
                     
                     if filename and file_content:
                         # 先检查是否有任务在运行
@@ -1158,73 +1227,76 @@ class VideoEditorHandler(http.server.SimpleHTTPRequestHandler):
                         self.end_headers()
                         self.wfile.write(json.dumps({"success": True}).encode('utf-8'))
                         return
-            
-            self.send_response(400)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({"success": False, "error": "Invalid upload"}).encode('utf-8'))
-        
-        elif self.path == '/render':
-            with lock:
-                if processing_status["running"]:
-                    self.send_response(400)
-                    self.send_header('Content-type', 'application/json')
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"success": False, "error": "已有任务正在运行"}).encode('utf-8'))
-                    return
-                
-                processing_status["running"] = True
-                processing_status["progress"] = 0
-                processing_status["status"] = "准备烧录..."
-                processing_status["logs"] = []
-                processing_status["output_files"] = None
-                processing_status["should_stop"] = False
-            
-            thread = RenderingThread(self.whisper_dir, self.upload_dir)
-            thread.start()
-            
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({"success": True}).encode('utf-8'))
-        
-        elif self.path == '/save_srt':
-            content_length = int(self.headers.get('Content-Length', 0))
-            data = self.rfile.read(content_length)
-            try:
-                request_data = json.loads(data.decode('utf-8'))
-                content = request_data.get('content', '')
-                
-                with lock:
-                    srt_path = processing_status.get("srt_path")
-                
-                if srt_path:
-                    with open(srt_path, 'w', encoding='utf-8') as f:
-                        f.write(content)
-                    
-                    self.send_response(200)
-                    self.send_header('Content-type', 'application/json')
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"success": True}).encode('utf-8'))
                 else:
                     self.send_response(400)
                     self.send_header('Content-type', 'application/json')
                     self.end_headers()
-                    self.wfile.write(json.dumps({"success": False, "error": "没有找到字幕文件"}).encode('utf-8'))
-            except Exception as e:
-                self.send_response(400)
+                    self.wfile.write(json.dumps({"success": False, "error": "Invalid upload"}).encode('utf-8'))
+            elif self.path == '/render':
+                with lock:
+                    if processing_status["running"]:
+                        self.send_response(400)
+                        self.send_header('Content-type', 'application/json')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"success": False, "error": "已有任务正在运行"}).encode('utf-8'))
+                        return
+                    
+                    processing_status["running"] = True
+                    processing_status["progress"] = 0
+                    processing_status["status"] = "准备烧录..."
+                    processing_status["logs"] = []
+                    processing_status["output_files"] = None
+                    processing_status["should_stop"] = False
+                
+                thread = RenderingThread(self.whisper_dir, self.upload_dir)
+                thread.start()
+                
+                self.send_response(200)
                 self.send_header('Content-type', 'application/json')
                 self.end_headers()
-                self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode('utf-8'))
-        
-        elif self.path == '/stop':
-            with lock:
-                if processing_status["running"]:
-                    processing_status["should_stop"] = True
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-            self.wfile.write(json.dumps({"success": True}).encode('utf-8'))
+                self.wfile.write(json.dumps({"success": True}).encode('utf-8'))
+            elif self.path == '/save_srt':
+                content_length = int(self.headers.get('Content-Length', 0))
+                data = self.rfile.read(content_length)
+                try:
+                    request_data = json.loads(data.decode('utf-8'))
+                    content = request_data.get('content', '')
+                    
+                    with lock:
+                        srt_path = processing_status.get("srt_path")
+                    
+                    if srt_path:
+                        with open(srt_path, 'w', encoding='utf-8') as f:
+                            f.write(content)
+                        
+                        self.send_response(200)
+                        self.send_header('Content-type', 'application/json')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"success": True}).encode('utf-8'))
+                    else:
+                        self.send_response(400)
+                        self.send_header('Content-type', 'application/json')
+                        self.end_headers()
+                        self.wfile.write(json.dumps({"success": False, "error": "没有找到字幕文件"}).encode('utf-8'))
+                except Exception as e:
+                    self.send_response(400)
+                    self.send_header('Content-type', 'application/json')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"success": False, "error": str(e)}).encode('utf-8'))
+            elif self.path == '/stop':
+                with lock:
+                    if processing_status["running"]:
+                        processing_status["should_stop"] = True
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"success": True}).encode('utf-8'))
+        except (ConnectionResetError, BrokenPipeError):
+            # 客户端断开连接，忽略此错误，任务会继续在后台运行
+            pass
+        except Exception as e:
+            # 其他错误，记录日志
+            self.log_message(f"POST 错误：{e}")
 
 
 def get_whisper_dir():
@@ -1273,6 +1345,15 @@ def main():
             httpd.shutdown()
             shutil.rmtree(upload_dir, ignore_errors=True)
             print("服务器已停止")
+        except Exception as e:
+            # 处理其他异常（如连接重置）
+            if "ConnectionResetError" in str(type(e).__name__) or "forcibly closed" in str(e):
+                # 忽略连接重置错误，这是正常的网络行为
+                pass
+            else:
+                print(f"\n服务器错误：{e}")
+                httpd.shutdown()
+                shutil.rmtree(upload_dir, ignore_errors=True)
 
 
 if __name__ == '__main__':

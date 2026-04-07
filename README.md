@@ -14,14 +14,14 @@ A simple web-based tool for automatically generating subtitles for videos using 
 
 ## Mainwindow
 
-![mainwindow](mainwindow.png)
-![mainwindow_1](mainwindow_1.png)
+!\[mainwindow]\(mainwindow\.png null)
+!\[mainwindow\_1]\(mainwindow\_1.png null)
 
 ## Release
 
 通过网盘分享的文件：video-subtitle-toolkit
-链接: https://pan.baidu.com/s/1IEZzU3UIy1SftBc4kREzEg?pwd=jrp9 提取码: jrp9 
---来自百度网盘超级会员v5的分享
+链接: <https://pan.baidu.com/s/1IEZzU3UIy1SftBc4kREzEg?pwd=jrp9> 提取码: jrp9
+\--来自百度网盘超级会员v5的分享
 
 ## Quick Start
 
@@ -30,16 +30,14 @@ A simple web-based tool for automatically generating subtitles for videos using 
 #### Automatic Build (Recommended)
 
 1. **Run build script** (first time only):
-   
+
    **Option A: Double-click to run (Recommended)**
    - Double-click `build_mac.command` in Finder
    - This will automatically download and set up everything
-   
-   **Option B: Run from terminal**
+     **Option B: Run from terminal**
    ```bash
    ./build_mac.command
    ```
-   
    This will automatically download and set up:
    - Python 3.11 (via Homebrew)
    - FFmpeg (via Homebrew)
@@ -47,18 +45,15 @@ A simple web-based tool for automatically generating subtitles for videos using 
    - Whisper model (ggml-tiny.bin)
    - Python dependencies (opencv-python, Pillow, numpy)
    - Start script with auto-browser-open
-
 2. **Start the application**:
-   
+
    **Option A: Double-click to run (Recommended)**
    - Double-click `Release_Mac/start.command` in Finder
-   - The browser will open automatically at http://localhost:8000
-   
-   **Option B: Run from terminal**
+   - The browser will open automatically at <http://localhost:8000>
+     **Option B: Run from terminal**
    ```bash
    ./Release_Mac/start.command
    ```
-
 3. **Access from other devices** (same LAN):
    - Find your Mac's IP address: `ifconfig | grep inet`
    - Other devices can access: `http://<your-ip>:8000`
@@ -85,13 +80,11 @@ A simple web-based tool for automatically generating subtitles for videos using 
    - whisper.cpp (compiled from source)
    - Python dependencies (opencv-python, Pillow, numpy)
    - Start script with auto-browser-open
-
 2. **Start the application**:
    ```bash
    ./Release_Linux/start.sh
    ```
-   The browser will open automatically at http://localhost:8000
-
+   The browser will open automatically at <http://localhost:8000>
 3. **Access from other devices** (same LAN):
    - Find your PC's IP address: `ip addr` or `ifconfig`
    - Other devices can access: `http://<your-ip>:8000`
@@ -119,13 +112,11 @@ A simple web-based tool for automatically generating subtitles for videos using 
    - Whisper model (ggml-tiny.bin)
    - Python dependencies (opencv-python, Pillow, numpy)
    - Start script with auto-browser-open
-
 2. **Start the application**:
    ```bash
    Release_Windows\start.bat
    ```
-   The browser will open automatically at http://localhost:8000
-
+   The browser will open automatically at <http://localhost:8000>
 3. **Access from other devices** (same LAN):
    - Find your PC's IP address: `ipconfig`
    - Other devices can access: `http://<your-ip>:8000`
@@ -136,15 +127,13 @@ A simple web-based tool for automatically generating subtitles for videos using 
    ```bash
    build_windows.bat
    ```
-
 2. **Package as MSI installer**:
    ```bash
    package_windows.bat
    ```
    This will:
    - Download WiX Toolset (if not installed)
-   - Package Release_Windows into VideoSubtitleTool.msi
-
+   - Package Release\_Windows into VideoSubtitleTool.msi
 3. **Distribute the MSI**:
    - Silent install: `msiexec /i VideoSubtitleTool.msi /qn`
    - Custom path: `msiexec /i VideoSubtitleTool.msi INSTALLFOLDER="D:\Tools"`
@@ -173,26 +162,28 @@ video-subtitle-toolkit/
 ```
 
 **Generated directories after build:**
-- `Release_Linux/` - Linux runtime files (created by build_linux.sh)
-- `Release_Mac/` - macOS runtime files (created by build_mac.command)
-- `Release_Windows/` - Windows runtime files (created by build_windows.bat)
+
+- `Release_Linux/` - Linux runtime files (created by build\_linux.sh)
+- `Release_Mac/` - macOS runtime files (created by build\_mac.command)
+- `Release_Windows/` - Windows runtime files (created by build\_windows.bat)
 - `temp/` - Temporary files during build
 
 ## Build Scripts
 
-### build_linux.sh
+### build\_linux.sh
 
 Automatically downloads and compiles all dependencies on Linux:
 
-| Step | Action | Output |
-|------|--------|--------|
-| 1 | Install system dependencies (Python, FFmpeg, CMake, GCC) | System packages |
-| 2 | Create Python virtual environment | `Release_Linux/Release/venv/` |
-| 3 | Setup FFmpeg symlinks | `Release_Linux/Release/ffmpeg/` |
-| 4 | Download & Compile whisper.cpp | `Release_Linux/Release/whisper-cli` |
-| 5 | Copy Python scripts & Create start.sh | `Release_Linux/start.sh` |
+| Step | Action                                                   | Output                              |
+| ---- | -------------------------------------------------------- | ----------------------------------- |
+| 1    | Install system dependencies (Python, FFmpeg, CMake, GCC) | System packages                     |
+| 2    | Create Python virtual environment                        | `Release_Linux/Release/venv/`       |
+| 3    | Setup FFmpeg symlinks                                    | `Release_Linux/Release/ffmpeg/`     |
+| 4    | Download & Compile whisper.cpp                           | `Release_Linux/Release/whisper-cli` |
+| 5    | Copy Python scripts & Create start.sh                    | `Release_Linux/start.sh`            |
 
 **Features:**
+
 - Auto-detects Linux distribution (Ubuntu, Debian, CentOS, Fedora, Arch, Alpine, Kylin)
 - Supports Ubuntu 18.04+, Debian 10+, CentOS 7+, Fedora 30+, Arch Linux, Alpine Linux
 - Uses Tsinghua PyPI mirror for faster downloads in China
@@ -201,63 +192,67 @@ Automatically downloads and compiles all dependencies on Linux:
 - Auto-opens browser when started
 
 **Supported Distributions:**
+
 - Ubuntu / Debian / Kylin
 - CentOS / RHEL / Fedora / Rocky / AlmaLinux
 - Arch Linux / Manjaro
 - Alpine Linux
 
-### build_mac.command
+### build\_mac.command
 
 Automatically downloads and compiles all dependencies on macOS:
 
-| Step | Action | Output |
-|------|--------|--------|
-| 1 | Check/Install Homebrew, CMake, Python, FFmpeg | System dependencies |
-| 2 | Create Python virtual environment | `Release_Mac/Release/python/venv/` |
-| 3 | Copy FFmpeg binaries | `Release_Mac/Release/ffmpeg/` |
-| 4 | Download & Compile whisper.cpp | `Release_Mac/Release/whisper-cli` |
-| 5 | Download ggml-tiny.bin model | `Release_Mac/Release/models/` |
-| 6 | Copy Python scripts & Create start.command | `Release_Mac/start.command` |
+| Step | Action                                        | Output                             |
+| ---- | --------------------------------------------- | ---------------------------------- |
+| 1    | Check/Install Homebrew, CMake, Python, FFmpeg | System dependencies                |
+| 2    | Create Python virtual environment             | `Release_Mac/Release/python/venv/` |
+| 3    | Copy FFmpeg binaries                          | `Release_Mac/Release/ffmpeg/`      |
+| 4    | Download & Compile whisper.cpp                | `Release_Mac/Release/whisper-cli`  |
+| 5    | Download ggml-tiny.bin model                  | `Release_Mac/Release/models/`      |
+| 6    | Copy Python scripts & Create start.command    | `Release_Mac/start.command`        |
 
 **Features:**
+
 - Supports both Apple Silicon (M1/M2/M3) and Intel Macs
 - Automatically enables Metal acceleration on Apple Silicon
 - Checks if already built (skips if `start.command` exists)
 - Auto-opens browser when started
 - Double-click to run (no terminal needed)
 
-### build_windows.bat
+### build\_windows.bat
 
 Automatically downloads and compiles all dependencies:
 
-| Step | Action | Output |
-|------|--------|--------|
-| 1 | Download Embedded Python 3.10 | `Release_Windows/Release/python/` |
-| 2 | Download FFmpeg | `Release_Windows/Release/ffmpeg/` |
-| 3 | Download & Compile whisper.cpp | `Release_Windows/Release/whisper-cli.exe` |
-| 4 | Download ggml-tiny.bin model | `Release_Windows/Release/models/` |
-| 5 | Copy Python scripts & Create start.bat | `Release_Windows/start.bat` |
+| Step | Action                                 | Output                                    |
+| ---- | -------------------------------------- | ----------------------------------------- |
+| 1    | Download Embedded Python 3.10          | `Release_Windows/Release/python/`         |
+| 2    | Download FFmpeg                        | `Release_Windows/Release/ffmpeg/`         |
+| 3    | Download & Compile whisper.cpp         | `Release_Windows/Release/whisper-cli.exe` |
+| 4    | Download ggml-tiny.bin model           | `Release_Windows/Release/models/`         |
+| 5    | Copy Python scripts & Create start.bat | `Release_Windows/start.bat`               |
 
 **Features:**
+
 - Checks if already built (skips if `start.bat` exists)
 - Handles path spaces correctly
 - Auto-opens browser when started
 
-### package_windows.bat
+### package\_windows.bat
 
 Creates an MSI installer for distribution:
 
-| Step | Action |
-|------|--------|
-| 1 | Check/Download WiX Toolset 3.14.1 |
-| 2 | Copy Release_Windows files to temp/package |
-| 3 | Harvest files with `heat` |
-| 4 | Compile with `candle` |
-| 5 | Link MSI with `light` |
+| Step | Action                                      |
+| ---- | ------------------------------------------- |
+| 1    | Check/Download WiX Toolset 3.14.1           |
+| 2    | Copy Release\_Windows files to temp/package |
+| 3    | Harvest files with `heat`                   |
+| 4    | Compile with `candle`                       |
+| 5    | Link MSI with `light`                       |
 
 **Output:** `VideoSubtitleTool.msi`
 
 **MSI Features:**
+
 - Custom installation path
 - Desktop shortcut
 - Start menu shortcut
@@ -283,7 +278,6 @@ If the automatic setup fails, you can manually:
    # Arch Linux
    sudo pacman -Sy --noconfirm python python-pip ffmpeg cmake base-devel git wget
    ```
-
 2. **Create Python Virtual Environment**:
    ```bash
    mkdir -p Release_Linux/Release
@@ -291,14 +285,12 @@ If the automatic setup fails, you can manually:
    source Release_Linux/Release/venv/bin/activate
    pip install opencv-python Pillow numpy
    ```
-
 3. **Setup FFmpeg**:
    ```bash
    mkdir -p Release_Linux/Release/ffmpeg
    ln -sf $(which ffmpeg) Release_Linux/Release/ffmpeg/ffmpeg
    ln -sf $(which ffprobe) Release_Linux/Release/ffmpeg/ffprobe
    ```
-
 4. **Compile whisper.cpp**:
    ```bash
    git clone https://github.com/ggerganov/whisper.cpp.git temp/whisper.cpp-master
@@ -309,7 +301,6 @@ If the automatic setup fails, you can manually:
    cd ../..
    cp temp/whisper.cpp-master/build/bin/whisper-cli Release_Linux/Release/
    ```
-
 5. **Create start.sh**:
    ```bash
    cat > Release_Linux/start.sh << 'EOF'
@@ -330,9 +321,8 @@ If the automatic setup fails, you can manually:
    EOF
    chmod +x Release_Linux/start.sh
    ```
-
 6. **Download Models**:
-   - https://huggingface.co/ggerganov/whisper.cpp/tree/main
+   - <https://huggingface.co/ggerganov/whisper.cpp/tree/main>
    - Place `.bin` files in `Release_Linux/Release/models/`
 
 ### macOS Manual Setup
@@ -343,7 +333,6 @@ If the automatic setup fails, you can manually:
    ```bash
    brew install python@3.11 ffmpeg cmake
    ```
-
 2. **Create Python Virtual Environment**:
    ```bash
    mkdir -p Release_Mac/Release/python
@@ -351,23 +340,21 @@ If the automatic setup fails, you can manually:
    source Release_Mac/Release/python/venv/bin/activate
    pip install opencv-python Pillow numpy
    ```
-
 3. **Compile whisper.cpp**:
    ```bash
    git clone https://github.com/ggerganov/whisper.cpp.git temp/whisper.cpp-master
    cd temp/whisper.cpp-master
    mkdir build && cd build
-   
+
    # For Apple Silicon:
    cmake .. -DCMAKE_BUILD_TYPE=Release -DWHISPER_METAL=ON
-   
+
    # For Intel:
    cmake .. -DCMAKE_BUILD_TYPE=Release
-   
+
    cmake --build . --config Release -j$(sysctl -n hw.ncpu)
    ```
    - Copy `build/bin/whisper-cli` and `.dylib` files to `Release_Mac/Release/`
-
 4. **Create start.command**:
    ```bash
    cat > Release_Mac/start.command << 'EOF'
@@ -388,9 +375,8 @@ If the automatic setup fails, you can manually:
    EOF
    chmod +x Release_Mac/start.command
    ```
-
 5. **Download Models**:
-   - https://huggingface.co/ggerganov/whisper.cpp/tree/main
+   - <https://huggingface.co/ggerganov/whisper.cpp/tree/main>
    - Place `.bin` files in `Release_Mac/Release/models/`
 
 ### Windows Manual Setup
@@ -398,13 +384,11 @@ If the automatic setup fails, you can manually:
 If the automatic setup fails, you can manually:
 
 1. **Download Embedded Python**:
-   - https://www.python.org/ftp/python/3.10.11/python-3.10.11-embed-amd64.zip
+   - <https://www.python.org/ftp/python/3.10.11/python-3.10.11-embed-amd64.zip>
    - Extract to `Release_Windows/Release/python/`
-
 2. **Download FFmpeg**:
-   - https://www.gyan.dev/ffmpeg/builds/
+   - <https://www.gyan.dev/ffmpeg/builds/>
    - Extract `bin/` folder to `Release_Windows/Release/ffmpeg/`
-
 3. **Compile whisper.cpp**:
    ```bash
    git clone https://github.com/ggerganov/whisper.cpp.git
@@ -414,14 +398,13 @@ If the automatic setup fails, you can manually:
    cmake --build . --config Release
    ```
    - Copy `bin/Release/whisper-cli.exe` and DLLs to `Release_Windows/Release/`
-
 4. **Download Models**:
-   - https://huggingface.co/ggerganov/whisper.cpp/tree/main
+   - <https://huggingface.co/ggerganov/whisper.cpp/tree/main>
    - Place `.bin` files in `Release_Windows/Release/models/`
 
 ## Usage
 
-1. Open http://localhost:8000 in your browser
+1. Open <http://localhost:8000> in your browser
 2. Select a Whisper model (click ℹ️ for download hints)
 3. Upload a video file
 4. Select processing mode:
@@ -431,14 +414,14 @@ If the automatic setup fails, you can manually:
 
 ## Models
 
-| Model | Size | Accuracy | Speed |
-|-------|------|----------|-------|
-| ggml-tiny.bin | 75 MB | Basic | Fastest |
-| ggml-base.bin | 142 MB | Good | Fast |
-| ggml-small.bin | 466 MB | Better | Medium |
-| ggml-medium.bin | 1.5 GB | Best | Slow |
+| Model           | Size   | Accuracy | Speed   |
+| --------------- | ------ | -------- | ------- |
+| ggml-tiny.bin   | 75 MB  | Basic    | Fastest |
+| ggml-base.bin   | 142 MB | Good     | Fast    |
+| ggml-small.bin  | 466 MB | Better   | Medium  |
+| ggml-medium.bin | 1.5 GB | Best     | Slow    |
 
-Download from: https://huggingface.co/ggerganov/whisper.cpp/tree/main
+Download from: <https://huggingface.co/ggerganov/whisper.cpp/tree/main>
 
 **Linux:** Place in `Release_Linux/Release/models/`
 
@@ -449,8 +432,9 @@ Download from: https://huggingface.co/ggerganov/whisper.cpp/tree/main
 ## Network Access
 
 The server binds to all network interfaces by default:
-- Local: http://localhost:8000
-- LAN: http://<your-ip>:8000
+
+- Local: <http://localhost:8000>
+- LAN: http\://<your-ip>:8000
 
 **Firewall:** Allow Python through Windows Firewall for LAN access.
 
