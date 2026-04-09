@@ -120,7 +120,8 @@ def find_ffmpeg():
     ]
     
     for path in possible_paths:
-        if os.path.exists(path):
+        # 不能把目录当成可执行文件（macOS 会报 Permission denied）
+        if os.path.isfile(path) and os.access(path, os.X_OK):
             return path
     
     # 尝试使用系统 PATH 中的 ffmpeg
@@ -417,6 +418,34 @@ def time_to_frame(time_str, fps):
     return int(total_seconds * fps)
 
 
+def srt_time_to_seconds(time_str):
+    """SRT 时间转秒"""
+    time_str = time_str.replace(',', '.')
+    h, m, s = time_str.split(':')
+    return int(h) * 3600 + int(m) * 60 + float(s)
+
+
+def seconds_to_ass_time(seconds_value):
+    """秒转 ASS 时间（H:MM:SS.cc）"""
+    if seconds_value < 0:
+        seconds_value = 0
+    hours = int(seconds_value // 3600)
+    minutes = int((seconds_value % 3600) // 60)
+    seconds = seconds_value % 60
+    centis = int(round((seconds - int(seconds)) * 100))
+    whole_seconds = int(seconds)
+    if centis >= 100:
+        centis -= 100
+        whole_seconds += 1
+    if whole_seconds >= 60:
+        whole_seconds -= 60
+        minutes += 1
+    if minutes >= 60:
+        minutes -= 60
+        hours += 1
+    return f"{hours}:{minutes:02d}:{whole_seconds:02d}.{centis:02d}"
+
+
 def draw_text_with_outline(draw, position, text, font, fill_color, outline_color, outline_width=2):
     """绘制带描边的文本"""
     x, y = position
@@ -543,228 +572,168 @@ def find_chinese_font():
 
 
 def burn_subtitles(video_path, srt_path, output_path, font_path=None, progress_callback=None, log_callback=None, stop_callback=None):
-    """烧录字幕到视频（包含音频）"""
+    """Create soft-subtitle output (stable mode)."""
     import time
-    
-    # 记录开始时间
+
     start_time = time.time()
-    
-    if font_path is None:
-        font_path = find_chinese_font()
-        if not font_path:
-            if log_callback:
-                log_callback("警告：未找到中文字体，将使用默认字体")
-            else:
-                print("警告：未找到中文字体，将使用默认字体")
-    
-    # 记录 GPU 使用情况
+    ffmpeg_path = find_ffmpeg()
+    if progress_callback:
+        progress_callback(50, "正在封装软字幕...")
+
+    cmd = [
+        ffmpeg_path, '-hide_banner', '-loglevel', 'error',
+        '-i', video_path, '-i', srt_path,
+        '-map', '0:v:0', '-map', '0:a?', '-map', '1:0',
+        '-c:v', 'copy', '-c:a', 'copy', '-c:s', 'mov_text',
+        '-metadata:s:s:0', 'language=chi',
+        '-movflags', '+faststart',
+        '-y', output_path
+    ]
     if log_callback:
-        gpu_status = []
-        if gpu_info['cuda_available']:
-            gpu_status.append("NVIDIA GPU (h264_nvenc)")
-        if gpu_info['metal_available']:
-            gpu_status.append("Apple Silicon (h264_videotoolbox)")
-        if gpu_info['opencl_available']:
-            gpu_status.append("OpenCL GPU (h264_vaapi)")
-        if gpu_status:
-            log_callback(f"GPU 加速：{', '.join(gpu_status)}")
-        else:
-            log_callback("GPU 加速：无（使用 CPU 处理）")
-    
+        log_callback("模式：软字幕（稳定优先，视频/音频均 copy）")
+        log_callback(f"执行命令: {' '.join(cmd)}")
+
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    while process.poll() is None:
+        if stop_callback and stop_callback():
+            process.terminate()
+            process.wait()
+            raise InterruptedError("字幕封装已停止")
+        time.sleep(0.1)
+    out, err = process.communicate()
+    if process.returncode != 0:
+        raise Exception(f"FFmpeg 软字幕封装失败：{err or out}")
+
+    if progress_callback:
+        progress_callback(90, "软字幕封装完成")
+    elapsed_time = time.time() - start_time
+    if log_callback:
+        log_callback(f"软字幕完成，耗时：{elapsed_time:.2f}秒")
+
+
+def burn_subtitles_hard(video_path, srt_path, output_path, progress_callback=None, log_callback=None, stop_callback=None):
+    """Create hard-subtitle output (optional mode)."""
+    import time
+
+    start_time = time.time()
+    ffmpeg_path = find_ffmpeg()
+    if progress_callback:
+        progress_callback(92, "正在生成硬字幕...")
+
     cap = cv2.VideoCapture(video_path)
-    fps = cap.get(cv2.CAP_PROP_FPS)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    
-    # 根据视频尺寸智能调整字体大小
-    # 竖屏视频（高度大于宽度）通常需要更小的字体
-    if height > width:
-        font_size = max(28, int(width * 0.05))  # 竖屏：视频宽度的 5%，最小 28
-    else:
-        font_size = max(36, int(width * 0.04))  # 横屏：视频宽度的 4%，最小 36
-    
-    # 边距也根据视频尺寸调整
-    margin = int(width * 0.08)  # 左右边距：视频宽度的 8%
-    bottom_margin = int(height * 0.06)  # 底边距：视频高度的 6%
-    
-    if log_callback:
-        log_callback(f"视频信息：{width}x{height}, {fps}fps, {total_frames}帧")
-        log_callback(f"使用字体：{font_path}")
-        log_callback(f"字体大小：{font_size}px")
-    else:
-        print(f"视频信息：{width}x{height}, {fps}fps, {total_frames}帧")
-        print(f"使用字体：{font_path}")
-        print(f"字体大小：{font_size}px")
-    
-    subtitles = parse_srt(srt_path)
-    if log_callback:
-        log_callback(f"字幕数量：{len(subtitles)}")
-    else:
-        print(f"字幕数量：{len(subtitles)}")
-    
-    # 先生成无音频的临时视频
-    temp_video_no_audio = output_path.replace('.mp4', '_no_audio.mp4')
-    
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    out = cv2.VideoWriter(temp_video_no_audio, fourcc, fps, (width, height))
-    
-    frame_idx = 0
-    sub_idx = 0
-    
-    if log_callback:
-        log_callback("开始烧录字幕...")
-    else:
-        print("开始烧录字幕...")
-    
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        
-        current_time = frame_idx / fps
-        
-        while sub_idx < len(subtitles):
-            start, end, text = subtitles[sub_idx]
-            start_frame = time_to_frame(start, fps)
-            end_frame = time_to_frame(end, fps)
-            
-            if start_frame <= frame_idx < end_frame:
-                # 字幕最大宽度 = 视频宽度 - 左右边距
-                max_subtitle_width = width - margin * 2
-                
-                pil_img = render_subtitle(text, font_path, font_size, max_subtitle_width)
-                
-                img_cv = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGBA2BGRA)
-                
-                subtitle_width = img_cv.shape[1]
-                subtitle_height = img_cv.shape[0]
-                
-                # 居中显示在底部
-                x = (width - subtitle_width) // 2
-                y = height - subtitle_height - bottom_margin
-                
-                # 确保在视频范围内
-                x = max(0, min(x, width - subtitle_width))
-                y = max(0, min(y, height - subtitle_height))
-                
-                h, w = img_cv.shape[:2]
-                if x + w <= width and y + h <= height and x >= 0 and y >= 0:
-                    roi = frame[y:y+h, x:x+w]
-                    
-                    alpha = img_cv[:, :, 3] / 255.0
-                    alpha = np.expand_dims(alpha, axis=2)
-                    
-                    blended = (1 - alpha) * roi + alpha * img_cv[:, :, :3]
-                    frame[y:y+h, x:x+w] = blended.astype(np.uint8)
-                
-                break
-            elif frame_idx >= end_frame:
-                sub_idx += 1
-            else:
-                break
-        
-        out.write(frame)
-        frame_idx += 1
-        
-        # 检查是否应该停止
-        if stop_callback and stop_callback():
-            if log_callback:
-                log_callback("烧录已停止")
-            cap.release()
-            out.release()
-            # 删除未完成的临时文件
-            if os.path.exists(temp_video_no_audio):
-                os.remove(temp_video_no_audio)
-            return
-        
-        if progress_callback and frame_idx % 10 == 0:
-            progress = 50 + int((frame_idx / total_frames) * 40)
-            progress_callback(min(progress, 90), f"烧录字幕：{frame_idx}/{total_frames}")
-        
-        if frame_idx % 100 == 0 and not progress_callback:
-            print(f"进度：{frame_idx}/{total_frames} ({frame_idx*100//total_frames}%)")
-    
     cap.release()
-    out.release()
-    
-    # 使用 FFmpeg 合并原始音频和字幕视频
-    if log_callback:
-        log_callback("正在合并音频...")
+    if width <= 0 or height <= 0:
+        width, height = 1920, 1080
+
+    # 字号按视频宽度自适应：解决高分辨率/宽屏下字幕偏小问题
+    if height > width:
+        # 竖屏适度放大，避免遮挡主体
+        font_size = max(26, min(52, int(width * 0.050)))
     else:
-        print("正在合并音频...")
-    
-    if progress_callback:
-        progress_callback(95, "正在合并音频...")
-    
-    ffmpeg_path = find_ffmpeg()
-    
-    # 根据 GPU 类型选择不同的编码方式
-    if gpu_info['cuda_available']:
-        # NVIDIA GPU: 使用 h264_nvenc 编码器
-        merge_cmd = [
-            ffmpeg_path, '-i', temp_video_no_audio, '-i', video_path,
-            '-c:v', 'h264_nvenc', '-preset', 'medium', '-rc', 'vbr',
-            '-c:a', 'aac', '-b:a', '192k',
-            '-map', '0:v:0', '-map', '1:a:0',
-            '-y', output_path
-        ]
-        if log_callback:
-            log_callback("使用 NVIDIA GPU 加速编码 (h264_nvenc)")
-        else:
-            print("使用 NVIDIA GPU 加速编码 (h264_nvenc)")
-    elif gpu_info['metal_available']:
-        # Apple Silicon: 使用 videotoolbox
-        merge_cmd = [
-            ffmpeg_path, '-i', temp_video_no_audio, '-i', video_path,
-            '-c:v', 'h264_videotoolbox', '-preset', 'medium',
-            '-c:a', 'aac', '-b:a', '192k',
-            '-map', '0:v:0', '-map', '1:a:0',
-            '-y', output_path
-        ]
-        if log_callback:
-            log_callback("使用 Apple Silicon GPU 加速编码 (h264_videotoolbox)")
-        else:
-            print("使用 Apple Silicon GPU 加速编码 (h264_videotoolbox)")
-    elif gpu_info['opencl_available']:
-        # OpenCL GPU: 使用 h264_vaapi 或 qsv
-        merge_cmd = [
-            ffmpeg_path, '-i', temp_video_no_audio, '-i', video_path,
-            '-c:v', 'h264_vaapi', '-preset', 'medium',
-            '-c:a', 'aac', '-b:a', '192k',
-            '-map', '0:v:0', '-map', '1:a:0',
-            '-y', output_path
-        ]
-        if log_callback:
-            log_callback("使用 OpenCL GPU 加速编码 (h264_vaapi)")
-        else:
-            print("使用 OpenCL GPU 加速编码 (h264_vaapi)")
+        # 横屏随宽度增长
+        font_size = max(30, min(64, int(width * 0.038)))
+    margin_v = max(18, int(height * 0.050))
+    outline = 1
+    system_name = platform.system()
+    if system_name == "Windows":
+        ass_font_name = "Microsoft YaHei"
+    elif system_name == "Darwin":
+        ass_font_name = "PingFang SC"
     else:
-        # CPU: 使用 copy 模式（最快）
-        merge_cmd = [
-            ffmpeg_path, '-i', temp_video_no_audio, '-i', video_path,
-            '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k',
-            '-map', '0:v:0', '-map', '1:a:0',
+        ass_font_name = "Noto Sans CJK SC"
+
+    parsed = parse_srt(srt_path)
+    if not parsed:
+        raise Exception("SRT 解析后无有效字幕，无法烧录硬字幕")
+
+    temp_ass = None
+    try:
+        min_duration = 0.12
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.ass', mode='w', encoding='utf-8') as tf:
+            temp_ass = tf.name
+            tf.write("[Script Info]\n")
+            tf.write("ScriptType: v4.00+\n")
+            tf.write("WrapStyle: 2\n")
+            tf.write(f"PlayResX: {width}\n")
+            tf.write(f"PlayResY: {height}\n")
+            tf.write("\n[V4+ Styles]\n")
+            tf.write("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, "
+                     "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, "
+                     "Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n")
+            tf.write(
+                f"Style: Default,{ass_font_name},{font_size},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,"
+                f"0,0,0,0,100,100,0,0,1,{outline},0,2,20,20,{margin_v},1\n"
+            )
+            tf.write("\n[Events]\n")
+            tf.write("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
+            for start, end, text in parsed:
+                start_s = srt_time_to_seconds(start)
+                end_s = srt_time_to_seconds(end)
+                if end_s <= start_s:
+                    end_s = start_s + min_duration
+                elif end_s - start_s < min_duration:
+                    end_s = start_s + min_duration
+                ass_text = text.replace('\\', r'\\').replace('{', r'\{').replace('}', r'\}').replace('\n', r'\N')
+                tf.write(
+                    f"Dialogue: 0,{seconds_to_ass_time(start_s)},{seconds_to_ass_time(end_s)},Default,,0,0,0,,{ass_text}\n"
+                )
+
+        sub_path = os.path.abspath(temp_ass).replace('\\', '/')
+        # ffmpeg filter 参数需要转义冒号
+        if len(sub_path) >= 2 and sub_path[1] == ':':
+            sub_path = sub_path[0] + '\\:' + sub_path[2:]
+        if system_name == 'Windows':
+            vf_filter = f"ass=filename={sub_path}:fontsdir=C\\:/Windows/Fonts"
+        else:
+            vf_filter = f"ass=filename={sub_path}"
+
+        if system_name == "Darwin":
+            # macOS 使用 VideoToolbox 硬件编码，显著提升速度
+            video_encode_args = ['-c:v', 'h264_videotoolbox', '-b:v', '8M', '-maxrate', '12M', '-bufsize', '24M']
+        else:
+            video_encode_args = ['-c:v', 'libx264', '-preset', 'medium', '-crf', '20']
+
+        cmd = [
+            ffmpeg_path, '-hide_banner', '-loglevel', 'error',
+            '-i', video_path,
+            '-vf', vf_filter,
+            *video_encode_args,
+            '-c:a', 'copy',
+            '-fps_mode', 'passthrough',
+            '-movflags', '+faststart',
             '-y', output_path
         ]
         if log_callback:
-            log_callback("使用 CPU 编码（copy 模式）")
-        else:
-            print("使用 CPU 编码（copy 模式）")
-    
-    subprocess.run(merge_cmd, check=True, capture_output=True)
-    
-    # 删除临时文件
-    os.remove(temp_video_no_audio)
-    
-    # 计算耗时
+            log_callback("模式：硬字幕（默认）")
+            if system_name == "Darwin":
+                log_callback("编码器：h264_videotoolbox（macOS 硬件加速）")
+            else:
+                log_callback("编码器：libx264（CPU）")
+            log_callback(f"硬字幕样式：Font={ass_font_name}, FontSize={font_size}, Outline={outline}, MarginV={margin_v}")
+            log_callback(f"执行命令: {' '.join(cmd)}")
+
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        while process.poll() is None:
+            if stop_callback and stop_callback():
+                process.terminate()
+                process.wait()
+                raise InterruptedError("硬字幕生成已停止")
+            time.sleep(0.1)
+        out, err = process.communicate()
+        if process.returncode != 0:
+            raise Exception(f"FFmpeg 硬字幕生成失败：{err or out}")
+    finally:
+        if temp_ass and os.path.exists(temp_ass):
+            try:
+                os.remove(temp_ass)
+            except OSError:
+                pass
+
     elapsed_time = time.time() - start_time
-    print(f"字幕烧录完成，耗时：{elapsed_time:.2f}秒")
-    
     if log_callback:
-        log_callback(f"完成！输出文件：{output_path}")
-    else:
-        print(f"完成！输出文件：{output_path}")
+        log_callback(f"硬字幕完成，耗时：{elapsed_time:.2f}秒")
 
 
 def main():
@@ -811,7 +780,7 @@ def main():
         print("[3/3] 渲染字幕...")
         output_path = os.path.join(dirname, f"{basename}_with_subtitles.mp4")
         
-        burn_subtitles(video_path, srt_path, output_path)
+        burn_subtitles_hard(video_path, srt_path, output_path)
         
         print()
         print("======================================")
@@ -834,3 +803,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+

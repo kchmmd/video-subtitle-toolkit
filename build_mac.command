@@ -23,6 +23,17 @@ echo "Video Subtitle Tool - macOS Build Script"
 echo "========================================"
 echo ""
 
+# 检查 Xcode Command Line Tools（编译 FFmpeg/whisper.cpp 必需）
+if ! xcode-select -p >/dev/null 2>&1; then
+    echo -e "${RED}Xcode Command Line Tools not found.${NC}"
+    echo "Please run the following command and complete installation:"
+    echo "  xcode-select --install"
+    echo ""
+    echo "Then run this build script again."
+    exit 1
+fi
+echo -e "${GREEN}✓ Xcode Command Line Tools are available${NC}"
+
 # 检查是否已构建
 if [ -f "Release_Mac/start.command" ]; then
     echo -e "${GREEN}Build already completed!${NC}"
@@ -112,12 +123,10 @@ if [ -z "$PYTHON_CMD" ]; then
     fi
 fi
 
-# 检查 FFmpeg
-if ! command -v ffmpeg &> /dev/null; then
-    echo -e "${YELLOW}FFmpeg not found. Installing via Homebrew...${NC}"
-    brew install ffmpeg
-fi
-echo -e "${GREEN}✓ FFmpeg is available: $(ffmpeg -version | head -n1)${NC}"
+# 安装 FFmpeg 编译依赖（用于源码编译带 libass 的 ffmpeg）
+echo -e "${YELLOW}Installing FFmpeg build dependencies via Homebrew...${NC}"
+brew install pkg-config yasm nasm libass freetype harfbuzz fribidi
+echo -e "${GREEN}✓ FFmpeg build dependencies are ready${NC}"
 
 # ========================================
 # 步骤 2: 设置 Python 虚拟环境
@@ -151,40 +160,79 @@ pip install opencv-python Pillow numpy
 echo -e "${GREEN}✓ Python environment setup complete${NC}"
 
 # ========================================
-# 步骤 3: 复制 FFmpeg
+# 步骤 3: 编译 FFmpeg（启用 libass）
 # ========================================
 echo ""
 echo "========================================"
-echo "Step 3/5: Setting up FFmpeg"
+echo "Step 3/5: Building FFmpeg with libass"
 echo "========================================"
 echo ""
 
 FFMPEG_DIR="$ROOT_DIR/Release_Mac/Release/ffmpeg"
 mkdir -p "$FFMPEG_DIR"
+FFMPEG_TARGET_BIN="$FFMPEG_DIR/ffmpeg"
+FFPROBE_TARGET_BIN="$FFMPEG_DIR/ffprobe"
 
-# 复制 FFmpeg 二进制文件
-FFMPEG_BIN=$(which ffmpeg)
-FFPROBE_BIN=$(which ffprobe)
-FFPLAY_BIN=$(which ffplay 2>/dev/null || echo "")
-
-echo "Copying FFmpeg binaries..."
-cp "$FFMPEG_BIN" "$FFMPEG_DIR/"
-cp "$FFPROBE_BIN" "$FFMPEG_DIR/"
-[ -n "$FFPLAY_BIN" ] && cp "$FFPLAY_BIN" "$FFMPEG_DIR/"
-
-# 复制依赖库（使用 otool 和 install_name_tool 处理依赖）
-echo "Copying FFmpeg dependencies..."
-# 获取 FFmpeg 依赖的库
-FFMPEG_DEPS=$(otool -L "$FFMPEG_BIN" | grep -E "^\s+/opt/homebrew|^\s+/usr/local" | awk '{print $1}')
-
-mkdir -p "$FFMPEG_DIR/lib"
-for dep in $FFMPEG_DEPS; do
-    if [ -f "$dep" ]; then
-        cp "$dep" "$FFMPEG_DIR/lib/" 2>/dev/null || true
+# 若已有可用 FFmpeg（支持 ass/subtitles 滤镜），则跳过下载和编译
+if [ -x "$FFMPEG_TARGET_BIN" ]; then
+    echo "Found existing FFmpeg in Release directory, checking subtitle filters..."
+    if "$FFMPEG_TARGET_BIN" -hide_banner -filters | grep -E " ass | subtitles " >/dev/null; then
+        echo -e "${GREEN}✓ Existing FFmpeg already supports ass/subtitles, skipping rebuild${NC}"
+        if [ ! -x "$FFPROBE_TARGET_BIN" ] && command -v ffprobe &> /dev/null; then
+            cp "$(which ffprobe)" "$FFPROBE_TARGET_BIN"
+            chmod +x "$FFPROBE_TARGET_BIN" 2>/dev/null || true
+        fi
+        goto_ffmpeg_done=true
+    else
+        echo -e "${YELLOW}Existing FFmpeg found but no ass/subtitles filters, rebuilding...${NC}"
+        goto_ffmpeg_done=false
     fi
-done
+else
+    goto_ffmpeg_done=false
+fi
 
-echo -e "${GREEN}✓ FFmpeg setup complete${NC}"
+if [ "$goto_ffmpeg_done" = false ]; then
+
+FFMPEG_VERSION="8.0.1"
+FFMPEG_SRC_DIR="$ROOT_DIR/temp/ffmpeg-$FFMPEG_VERSION"
+FFMPEG_TARBALL="$ROOT_DIR/temp/ffmpeg-$FFMPEG_VERSION.tar.xz"
+
+if [ ! -f "$FFMPEG_TARBALL" ]; then
+    echo "Downloading FFmpeg source $FFMPEG_VERSION..."
+    curl -L -o "$FFMPEG_TARBALL" "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VERSION.tar.xz"
+fi
+
+echo "Extracting FFmpeg source..."
+rm -rf "$FFMPEG_SRC_DIR"
+tar -xf "$FFMPEG_TARBALL" -C "$ROOT_DIR/temp"
+
+echo "Compiling FFmpeg with libass..."
+cd "$FFMPEG_SRC_DIR"
+make distclean >/dev/null 2>&1 || true
+./configure \
+  --prefix="$FFMPEG_DIR" \
+  --enable-gpl \
+  --enable-version3 \
+  --enable-libass \
+  --enable-libfreetype \
+  --enable-libharfbuzz \
+  --enable-libfribidi \
+  --enable-videotoolbox \
+  --enable-pthreads
+make -j"$(sysctl -n hw.ncpu)"
+make install
+cd "$ROOT_DIR"
+
+chmod +x "$FFMPEG_DIR/ffmpeg" "$FFMPEG_DIR/ffprobe" 2>/dev/null || true
+
+echo "Verifying subtitle filters..."
+if ! "$FFMPEG_DIR/ffmpeg" -hide_banner -filters | grep -E " ass | subtitles " >/dev/null; then
+    echo -e "${RED}ERROR: Built FFmpeg does not include ass/subtitles filters!${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}✓ FFmpeg build complete (libass enabled)${NC}"
+fi
 
 # ========================================
 # 步骤 4: 下载并编译 whisper.cpp

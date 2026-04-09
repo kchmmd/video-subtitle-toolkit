@@ -15,6 +15,7 @@ import shutil
 import urllib.parse
 import subprocess
 from pathlib import Path
+from datetime import datetime
 
 # 添加当前目录到路径
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -22,7 +23,7 @@ sys.path.insert(0, script_dir)
 
 from video_subtitle_editor import (
     extract_audio, run_whisper, parse_srt, time_to_frame,
-    find_chinese_font, render_subtitle, burn_subtitles,
+    find_chinese_font, render_subtitle, burn_subtitles, burn_subtitles_hard,
     gpu_info
 )
 
@@ -36,10 +37,23 @@ processing_status = {
     "should_stop": False,
     "srt_path": None,
     "video_path": None,
-    "basename": None
+    "basename": None,
+    "log_file": None
 }
 
 lock = threading.Lock()
+
+
+def append_log_file(message):
+    log_path = processing_status.get("log_file")
+    if not log_path:
+        return
+    try:
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(f"[{ts}] {message}\n")
+    except Exception:
+        pass
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -807,6 +821,7 @@ class VideoProcessingThread(threading.Thread):
     def log(self, message):
         with lock:
             processing_status["logs"].append(message)
+            append_log_file(message)
 
     def set_progress(self, value, status):
         with lock:
@@ -904,16 +919,15 @@ class VideoProcessingThread(threading.Thread):
                     self.set_progress(100, "字幕生成完成！")
                     return
 
-                # 步骤3: 渲染字幕（仅一键生成模式）
-                self.log("[3/3] 渲染字幕...")
-                self.set_progress(50, "正在渲染字幕...")
-                output_path = os.path.join(self.upload_dir, f"{basename}_with_subtitles.mp4")
+                # 步骤3: 字幕合成（默认硬字幕）
+                self.log("[3/3] 合成字幕...")
+                self.set_progress(50, "正在生成硬字幕（默认）...")
+                hard_output_path = os.path.join(self.upload_dir, f"{basename}_hard_subs.mp4")
 
-                # 直接使用 burn_subtitles 函数
-                burn_subtitles(
-                    video_path, 
-                    srt_path, 
-                    output_path,
+                burn_subtitles_hard(
+                    video_path,
+                    srt_path,
+                    hard_output_path,
                     progress_callback=self.set_progress,
                     log_callback=self.log,
                     stop_callback=self.is_stopped
@@ -924,7 +938,7 @@ class VideoProcessingThread(threading.Thread):
                     return
 
                 self.set_progress(100, "处理完成！")
-                self.log(f"完成！输出文件：{output_path}")
+                self.log(f"完成！输出文件：{hard_output_path}")
 
                 self.log("")
                 self.log("======================================")
@@ -933,18 +947,21 @@ class VideoProcessingThread(threading.Thread):
                 self.log("")
                 self.log(f"生成的文件：")
                 self.log(f"  - {srt_path} (原始字幕)")
-                self.log(f"  - {output_path} (最终视频)")
+                self.log(f"  - {hard_output_path} (最终视频-默认硬字幕)")
                 self.log("")
 
-                if os.path.exists(output_path):
-                    size_mb = os.path.getsize(output_path) / (1024 * 1024)
+                if os.path.exists(hard_output_path):
+                    size_mb = os.path.getsize(hard_output_path) / (1024 * 1024)
                     self.log(f"文件大小：{size_mb:.1f} MB")
 
                 with lock:
+                    log_file = processing_status.get("log_file")
                     processing_status["output_files"] = [
                         {"name": f"{basename}.srt (原始字幕)", "path": srt_path},
-                        {"name": f"{basename}_with_subtitles.mp4 (最终视频)", "path": output_path}
+                        {"name": f"{basename}_hard_subs.mp4 (最终视频-默认硬字幕)", "path": hard_output_path}
                     ]
+                    if log_file and os.path.exists(log_file):
+                        processing_status["output_files"].append({"name": f"{basename}.log (处理日志)", "path": log_file})
 
             finally:
                 shutil.rmtree(temp_dir, ignore_errors=True)
@@ -976,6 +993,7 @@ class RenderingThread(threading.Thread):
     def log(self, message):
         with lock:
             processing_status["logs"].append(message)
+            append_log_file(message)
 
     def set_progress(self, value, status):
         with lock:
@@ -1000,13 +1018,12 @@ class RenderingThread(threading.Thread):
             self.log(f"字幕文件：{srt_path}")
             self.log("")
 
-            output_path = os.path.join(self.upload_dir, f"{basename}_with_subtitles.mp4")
+            hard_output_path = os.path.join(self.upload_dir, f"{basename}_hard_subs.mp4")
 
-            # 直接使用 burn_subtitles 函数
-            burn_subtitles(
-                video_path, 
-                srt_path, 
-                output_path,
+            burn_subtitles_hard(
+                video_path,
+                srt_path,
+                hard_output_path,
                 progress_callback=self.set_progress,
                 log_callback=self.log,
                 stop_callback=self.is_stopped
@@ -1017,7 +1034,7 @@ class RenderingThread(threading.Thread):
                 return
 
             self.set_progress(100, "处理完成！")
-            self.log(f"完成！输出文件：{output_path}")
+            self.log(f"完成！输出文件：{hard_output_path}")
 
             self.log("")
             self.log("======================================")
@@ -1026,18 +1043,21 @@ class RenderingThread(threading.Thread):
             self.log("")
             self.log(f"生成的文件：")
             self.log(f"  - {srt_path} (原始字幕)")
-            self.log(f"  - {output_path} (最终视频)")
+            self.log(f"  - {hard_output_path} (最终视频-默认硬字幕)")
             self.log("")
 
-            if os.path.exists(output_path):
-                size_mb = os.path.getsize(output_path) / (1024 * 1024)
+            if os.path.exists(hard_output_path):
+                size_mb = os.path.getsize(hard_output_path) / (1024 * 1024)
                 self.log(f"文件大小：{size_mb:.1f} MB")
 
             with lock:
+                log_file = processing_status.get("log_file")
                 processing_status["output_files"] = [
                     {"name": f"{basename}.srt (原始字幕)", "path": srt_path},
-                    {"name": f"{basename}_with_subtitles.mp4 (最终视频)", "path": output_path}
+                    {"name": f"{basename}_hard_subs.mp4 (最终视频-默认硬字幕)", "path": hard_output_path}
                 ]
+                if log_file and os.path.exists(log_file):
+                    processing_status["output_files"].append({"name": f"{basename}.log (处理日志)", "path": log_file})
 
         except InterruptedError as e:
             self.log(f"已停止：{str(e)}")
@@ -1204,6 +1224,7 @@ class VideoEditorHandler(http.server.SimpleHTTPRequestHandler):
                             processing_status["srt_path"] = None
                             processing_status["video_path"] = None
                             processing_status["basename"] = None
+                            processing_status["log_file"] = None
                         
                         # 清理旧文件
                         for old_file in os.listdir(self.upload_dir):
@@ -1218,6 +1239,11 @@ class VideoEditorHandler(http.server.SimpleHTTPRequestHandler):
                         
                         with open(filepath, 'wb') as f:
                             f.write(file_content)
+
+                        basename = os.path.splitext(os.path.basename(filepath))[0]
+                        log_filename = f"{basename}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+                        with lock:
+                            processing_status["log_file"] = os.path.join(self.upload_dir, log_filename)
                         
                         thread = VideoProcessingThread(filepath, self.whisper_dir, self.upload_dir, mode, model_name)
                         thread.start()
@@ -1247,6 +1273,9 @@ class VideoEditorHandler(http.server.SimpleHTTPRequestHandler):
                     processing_status["logs"] = []
                     processing_status["output_files"] = None
                     processing_status["should_stop"] = False
+                    basename = processing_status.get("basename") or "render"
+                    log_filename = f"{basename}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+                    processing_status["log_file"] = os.path.join(self.upload_dir, log_filename)
                 
                 thread = RenderingThread(self.whisper_dir, self.upload_dir)
                 thread.start()
