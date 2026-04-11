@@ -17,6 +17,10 @@ A simple web-based tool for automatically generating subtitles for videos using 
 !\[mainwindow]\(mainwindow\.png null)
 !\[mainwindow\_1]\(mainwindow\_1.png null)
 
+## 演示视频
+
+<https://www.bilibili.com/video/BV1Ww9KB9E5Q/> 
+
 ## Release
 
 通过网盘分享的文件：video-subtitle-toolkit
